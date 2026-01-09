@@ -57,12 +57,21 @@ void mixer_cleanup(AudioMixer* mixer) {
 
 // Load audio file
 int mixer_load_audio(AudioMixer* mixer, const char* filename) {
+    if (!filename || strlen(filename) == 0) {
+        printf("Error: No filename provided\n");
+        return 0;
+    }
+    
+    printf("Attempting to load: %s\n", filename);
+    
     if (mixer->audio_buffer) {
         audio_buffer_destroy(mixer->audio_buffer);
     }
     
     mixer->audio_buffer = wav_load(filename);
     if (!mixer->audio_buffer) {
+        printf("Error: Could not load audio file: %s\n", filename);
+        printf("Please check that the file exists and is a valid WAV file\n");
         return 0;
     }
     
@@ -86,17 +95,55 @@ int mixer_load_audio(AudioMixer* mixer, const char* filename) {
         mixer_process_effects(mixer);
     }
     
+    // Store input filename and generate output filename
     strcpy(mixer->input_filename, filename);
+    
+    // Generate output filename
+    const char* basename = strrchr(filename, '/');
+    if (!basename) basename = strrchr(filename, '\\');
+    if (!basename) basename = filename; else basename++;
+    
+    // Remove extension and add _processed
+    char name_without_ext[256];
+    strncpy(name_without_ext, basename, sizeof(name_without_ext) - 1);
+    name_without_ext[sizeof(name_without_ext) - 1] = '\0';
+    
+    char* dot = strrchr(name_without_ext, '.');
+    if (dot) *dot = '\0';
+    
+    snprintf(mixer->output_filename, sizeof(mixer->output_filename), 
+             "%s_processed.wav", name_without_ext);
+    
+    printf("Loaded %s: %zu samples, %zu channels, %.0f Hz\n", 
+           filename, mixer->audio_buffer->length, 
+           mixer->audio_buffer->channels, mixer->sample_rate);
+    
     return 1;
 }
 
 // Save processed audio
 int mixer_save_audio(AudioMixer* mixer, const char* filename) {
     if (!mixer->processed_buffer) {
+        printf("Error: No audio processed to save. Load audio and process effects first.\n");
         return 0;
     }
     
-    return wav_save(filename, mixer->processed_buffer);
+    if (!filename || strlen(filename) == 0) {
+        printf("Error: No output filename provided\n");
+        return 0;
+    }
+    
+    printf("Saving audio to: %s\n", filename);
+    int result = wav_save(filename, mixer->processed_buffer);
+    
+    if (!result) {
+        printf("Error: Failed to save audio file: %s\n", filename);
+        printf("Check that the directory is writable\n");
+        return 0;
+    }
+    
+    printf("Successfully saved: %s (%zu samples)\n", filename, mixer->processed_buffer->length);
+    return 1;
 }
 
 // Process the effect chain

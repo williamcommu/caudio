@@ -1,11 +1,15 @@
 // Simple GUI implementation using SDL2 and basic rendering
 // This is a minimal GUI - for full ImGui, you'd need to add ImGui libraries
 
+#define _GNU_SOURCE
 #include "audio_mixer_gui.h"
 #include <SDL2/SDL.h>
 #include <stdio.h>
 #include <math.h>
 #include <string.h>
+#include <stdlib.h>
+#include <unistd.h>
+#include <sys/wait.h>
 
 // GUI state
 static SDL_Window* window = NULL;
@@ -13,6 +17,88 @@ static SDL_Renderer* renderer = NULL;
 static int window_width = 1200;
 static int window_height = 800;
 static int running = 1;
+
+// File dialog function
+char* open_file_dialog(void) {
+    static char selected_file[512] = {0};
+    selected_file[0] = '\0';
+    
+    // Try different file dialog methods based on available tools
+    FILE* fp = NULL;
+    
+    // Method 1: Try zenity (GNOME)
+    fp = popen("zenity --file-selection --title=\"Select Audio File\" "
+               "--file-filter=\"Audio files | *.wav *.mp3 *.flac *.ogg\" "
+               "--file-filter=\"WAV files | *.wav\" "
+               "--file-filter=\"All files | *\" 2>/dev/null", "r");
+    
+    if (fp && fgets(selected_file, sizeof(selected_file), fp)) {
+        // Remove newline
+        size_t len = strlen(selected_file);
+        if (len > 0 && selected_file[len-1] == '\n') {
+            selected_file[len-1] = '\0';
+        }
+        pclose(fp);
+        if (strlen(selected_file) > 0) {
+            printf("Selected file via zenity: %s\n", selected_file);
+            return selected_file;
+        }
+    }
+    if (fp) pclose(fp);
+    
+    // Method 2: Try kdialog (KDE)
+    fp = popen("kdialog --getopenfilename . \"*.wav *.mp3 *.flac *.ogg | Audio files\" 2>/dev/null", "r");
+    if (fp && fgets(selected_file, sizeof(selected_file), fp)) {
+        size_t len = strlen(selected_file);
+        if (len > 0 && selected_file[len-1] == '\n') {
+            selected_file[len-1] = '\0';
+        }
+        pclose(fp);
+        if (strlen(selected_file) > 0) {
+            printf("Selected file via kdialog: %s\n", selected_file);
+            return selected_file;
+        }
+    }
+    if (fp) pclose(fp);
+    
+    // Method 3: Try yad (alternative)
+    fp = popen("yad --file-selection --title=\"Select Audio File\" "
+               "--file-filter=\"Audio files | *.wav *.mp3 *.flac *.ogg\" 2>/dev/null", "r");
+    if (fp && fgets(selected_file, sizeof(selected_file), fp)) {
+        size_t len = strlen(selected_file);
+        if (len > 0 && selected_file[len-1] == '\n') {
+            selected_file[len-1] = '\0';
+        }
+        pclose(fp);
+        if (strlen(selected_file) > 0) {
+            printf("Selected file via yad: %s\n", selected_file);
+            return selected_file;
+        }
+    }
+    if (fp) pclose(fp);
+    
+    // Fallback: Try to find audio files in current directory
+    printf("No file dialog available. Looking for audio files in current directory...\n");
+    const char* fallback_files[] = {
+        "audio_samples/chain_original.wav",
+        "audio_samples/lowpass_filtered.wav", 
+        "audio_samples/original_sweep.wav",
+        "sine_440_5s.wav",
+        "test.wav",
+        "*.wav"
+    };
+    
+    for (int i = 0; i < 6; i++) {
+        if (access(fallback_files[i], F_OK) == 0) {
+            strcpy(selected_file, fallback_files[i]);
+            printf("Found audio file: %s\n", selected_file);
+            return selected_file;
+        }
+    }
+    
+    printf("No audio files found. Please ensure audio files are available.\n");
+    return NULL;
+}
 
 // Colors as structs
 static SDL_Color COLOR_BG = {30, 30, 35, 255};
@@ -356,22 +442,26 @@ int gui_render_frame(AudioMixer* mixer) {
     draw_text(20, 20, "File Operations");
     
     // Load button
+    static int load_button_pressed = 0;
     Button load_btn = {30, 40, 100, 30, 0, 0, "Load Audio"};
     if (draw_button(&load_btn, mouse_x, mouse_y, mouse_pressed)) {
-        // Simple file loading - try common test files
-        const char* test_files[] = {
-            "chain_original.wav",
-            "lowpass_filtered.wav", 
-            "original_sweep.wav",
-            "sine_440_5s.wav"
-        };
-        
-        for (int i = 0; i < 4; i++) {
-            if (mixer_load_audio(mixer, test_files[i])) {
-                printf("Loaded: %s\n", test_files[i]);
-                break;
+        if (!load_button_pressed) {
+            load_button_pressed = 1;
+            printf("Opening file dialog...\n");
+            
+            char* selected_file = open_file_dialog();
+            if (selected_file && strlen(selected_file) > 0) {
+                if (mixer_load_audio(mixer, selected_file)) {
+                    printf("Successfully loaded: %s\n", selected_file);
+                } else {
+                    printf("Failed to load: %s\n", selected_file);
+                }
+            } else {
+                printf("No file selected or dialog cancelled\n");
             }
         }
+    } else {
+        load_button_pressed = 0;
     }
     
     // Save button
@@ -380,10 +470,18 @@ int gui_render_frame(AudioMixer* mixer) {
     if (draw_button(&save_btn, mouse_x, mouse_y, mouse_pressed)) {
         if (!save_button_pressed) {
             save_button_pressed = 1;
-            if (mixer_save_audio(mixer, mixer->output_filename)) {
-                printf("Audio saved to: %s\n", mixer->output_filename);
+            // Generate output filename based on input
+            const char* output_file = mixer->output_filename[0] ? mixer->output_filename : "processed_audio.wav";
+            if (mixer_save_audio(mixer, output_file)) {
+                printf("Audio saved to: %s\n", output_file);
             } else {
-                printf("Failed to save audio\n");
+                printf("Failed to save audio to: %s\n", output_file);
+                // Try alternative location
+                if (mixer_save_audio(mixer, "output.wav")) {
+                    printf("Audio saved to: output.wav\n");
+                } else {
+                    printf("Failed to save audio\n");
+                }
             }
         }
     } else {
