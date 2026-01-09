@@ -4,6 +4,7 @@
 CC = gcc
 CFLAGS = -Wall -Wextra -O2 -std=c99 -ffast-math -Iinclude
 LDFLAGS = -lm
+GUI_LDFLAGS = -lm -lSDL2
 DEBUG_FLAGS = -g -DDEBUG -O0
 RELEASE_FLAGS = -O3 -DNDEBUG -march=native
 
@@ -13,19 +14,27 @@ INCLUDE_DIR = include
 BUILD_DIR = build
 EXAMPLES_DIR = examples
 AUDIO_SAMPLES_DIR = audio_samples
+GUI_DIR = gui
 
-# Project name
+# Project names
 PROJECT = audio_effects_demo
+GUI_PROJECT = audio_mixer_gui
 LIBRARY = libaudiofx.a
 
 # Source files
 SOURCES = audio_core.c wav_io.c audio_filters.c delay_effects.c reverb.c distortion.c modulation_effects.c
 MAIN_SOURCE = audio_effects_demo.c
+GUI_SOURCES = audio_mixer.c simple_gui.c
+GUI_MAIN_SOURCE = audio_mixer_main.c
+
 SRC_OBJECTS = $(addprefix $(BUILD_DIR)/, $(SOURCES:.c=.o))
 MAIN_OBJECT = $(BUILD_DIR)/$(MAIN_SOURCE:.c=.o)
+GUI_OBJECTS = $(addprefix $(BUILD_DIR)/, $(GUI_SOURCES:.c=.o))
+GUI_MAIN_OBJECT = $(BUILD_DIR)/$(GUI_MAIN_SOURCE:.c=.o)
 
 # Header files
 HEADERS = $(addprefix $(INCLUDE_DIR)/, audio_core.h wav_io.h audio_filters.h delay_effects.h reverb.h distortion.h modulation_effects.h)
+GUI_HEADERS = $(GUI_DIR)/audio_mixer_gui.h
 
 # Create build directory if it doesn't exist
 $(BUILD_DIR):
@@ -37,11 +46,23 @@ $(AUDIO_SAMPLES_DIR):
 # Default target
 all: $(BUILD_DIR) $(PROJECT)
 
+# Build GUI application
+gui: $(BUILD_DIR) $(GUI_PROJECT)
+
+# Build both console and GUI applications
+both: all gui
+
 # Build the main executable
 $(PROJECT): $(SRC_OBJECTS) $(MAIN_OBJECT)
 	@echo "Linking $(PROJECT)..."
 	$(CC) $(SRC_OBJECTS) $(MAIN_OBJECT) -o $(BUILD_DIR)/$(PROJECT) $(LDFLAGS)
 	@echo "Build complete! Run with: ./$(BUILD_DIR)/$(PROJECT)"
+
+# Build GUI application
+$(GUI_PROJECT): $(SRC_OBJECTS) $(GUI_OBJECTS) $(GUI_MAIN_OBJECT)
+	@echo "Linking $(GUI_PROJECT)..."
+	$(CC) $(SRC_OBJECTS) $(GUI_OBJECTS) $(GUI_MAIN_OBJECT) -o $(BUILD_DIR)/$(GUI_PROJECT) $(GUI_LDFLAGS)
+	@echo "GUI build complete! Run with: ./$(BUILD_DIR)/$(GUI_PROJECT) [audio_file.wav]"
 
 # Build static library
 library: $(BUILD_DIR) $(LIBRARY)
@@ -61,6 +82,11 @@ $(BUILD_DIR)/$(MAIN_SOURCE:.c=.o): $(EXAMPLES_DIR)/$(MAIN_SOURCE) $(HEADERS) | $
 	@echo "Compiling $<..."
 	$(CC) $(CFLAGS) -c $< -o $@
 
+# Compile GUI files from gui directory
+$(BUILD_DIR)/%.o: $(GUI_DIR)/%.c $(HEADERS) $(GUI_HEADERS) | $(BUILD_DIR)
+	@echo "Compiling GUI $<..."
+	$(CC) $(CFLAGS) -c $< -o $@
+
 # Debug build
 debug: CFLAGS += $(DEBUG_FLAGS)
 debug: clean $(PROJECT)
@@ -74,6 +100,14 @@ release: clean $(PROJECT)
 # Run the demo
 run: $(AUDIO_SAMPLES_DIR) $(PROJECT)
 	cd $(AUDIO_SAMPLES_DIR) && ../$(BUILD_DIR)/$(PROJECT)
+
+# Run GUI application
+run-gui: $(AUDIO_SAMPLES_DIR) gui
+	cd $(AUDIO_SAMPLES_DIR) && ../$(BUILD_DIR)/$(GUI_PROJECT)
+
+# Run GUI with test audio file
+run-gui-demo: $(AUDIO_SAMPLES_DIR) gui
+	cd $(AUDIO_SAMPLES_DIR) && ../$(BUILD_DIR)/$(GUI_PROJECT) sine_440_5s.wav
 
 # Run all demos automatically
 demo: $(AUDIO_SAMPLES_DIR) $(PROJECT)
@@ -179,14 +213,18 @@ help:
 	@echo "Audio Effects Library - Available targets:"
 	@echo ""
 	@echo "BUILD TARGETS:"
-	@echo "  all       - Build the demo application (default)"
+	@echo "  all       - Build the console demo application (default)"
+	@echo "  gui       - Build the GUI application"
+	@echo "  both      - Build both console and GUI versions"
 	@echo "  library   - Build static library (libaudiofx.a)"
 	@echo "  debug     - Build with debug symbols"
 	@echo "  release   - Build optimized release version"
 	@echo ""
 	@echo "RUN TARGETS:"
-	@echo "  run       - Run interactive demo"
-	@echo "  demo      - Run all demos automatically"
+	@echo "  run       - Run interactive console demo"
+	@echo "  run-gui   - Run GUI application"
+	@echo "  run-gui-demo - Run GUI with test audio file"
+	@echo "  demo      - Run all console demos automatically"
 	@echo ""
 	@echo "TEST TARGETS:"
 	@echo "  test-filters     - Test filter effects only"
@@ -198,13 +236,21 @@ help:
 	@echo ""
 	@echo "UTILITY TARGETS:"
 	@echo "  clean     - Remove build artifacts and generated WAV files"
-	@echo "  install   - Install to /usr/local/bin (requires sudo)"
+	@echo "  clean-all - Deep clean including audio sample directory"
+	@echo "  install   - Install console version to /usr/local/bin (requires sudo)"
+	@echo "  install-gui - Install GUI version to /usr/local/bin (requires sudo)"
 	@echo "  uninstall - Remove from /usr/local/bin (requires sudo)"
 	@echo "  docs      - Generate README.txt documentation"
 	@echo "  help      - Show this help message"
 	@echo ""
+	@echo "REQUIREMENTS:"
+	@echo "  Console: gcc, make, libm (math library)"
+	@echo "  GUI:     gcc, make, libm, SDL2 development libraries"
+	@echo ""
 	@echo "EXAMPLES:"
-	@echo "  make && make run    - Build and run interactive demo"
+	@echo "  make && make run        - Build and run console demo"
+	@echo "  make gui && make run-gui - Build and run GUI application"
+	@echo "  make both              - Build both versions"
 	@echo "  make release demo   - Build optimized version and run all demos"
 	@echo "  make library        - Build static library for your projects"
 
