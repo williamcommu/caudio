@@ -2,6 +2,7 @@
 #define WAV_IO_H
 
 #include "audio_core.h"
+#include <string.h>
 
 // WAV file header structure
 #pragma pack(push, 1)
@@ -26,5 +27,15 @@ typedef struct {
 AudioBuffer* wav_load(const char* filename);
 int wav_save(const char* filename, AudioBuffer* buffer);
 void print_wav_info(const char* filename);
+
+// MP3 file I/O functions
+AudioBuffer* mp3_load(const char* filename);
+
+// Generic audio loading function that detects format automatically
+AudioBuffer* audio_load(const char* filename);
+
+// Helper function to detect file format based on extension
+int is_mp3_file(const char* filename);
+int is_wav_file(const char* filename);
 
 #endif // WAV_IO_H

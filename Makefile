@@ -3,8 +3,8 @@
 
 CC = gcc
 CFLAGS = -Wall -Wextra -O2 -std=c99 -ffast-math -Iinclude
-LDFLAGS = -lm
-GUI_LDFLAGS = -lm -lSDL2
+LDFLAGS = -lm -lmpg123
+GUI_LDFLAGS = -lm -lSDL2 -lmpg123
 DEBUG_FLAGS = -g -DDEBUG -O0
 RELEASE_FLAGS = -O3 -DNDEBUG -march=native
 

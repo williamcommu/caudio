@@ -46,6 +46,7 @@ typedef struct {
     EffectParams params;
     void* effect_instance;  // Pointer to the actual effect
     char name[64];
+    int processing_order;   // User-defined processing order (1-8)
 } EffectSlot;
 
 // Audio mixer state

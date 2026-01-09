@@ -46,7 +46,7 @@ int main(int argc, char** argv) {
     
     printf("GUI initialized successfully\n");
     printf("Controls:\n");
-    printf("- Load Audio: Load a WAV file for processing\n");
+    printf("- Load Audio: Load a WAV or MP3 file for processing\n");
     printf("- Effect buttons: Add effects to the chain\n");
     printf("- Sliders: Adjust effect parameters\n");
     printf("- Process: Apply all effects to the audio\n");

@@ -64,26 +64,35 @@ int mixer_load_audio(AudioMixer* mixer, const char* filename) {
     
     printf("Attempting to load: %s\n", filename);
     
+    // Stop any current playback to prevent race conditions
+    extern void stop_playback(void);
+    extern void cleanup_audio_playback(void);
+    stop_playback();
+    
     if (mixer->audio_buffer) {
         audio_buffer_destroy(mixer->audio_buffer);
+        mixer->audio_buffer = NULL;
     }
     
-    mixer->audio_buffer = wav_load(filename);
+    // Also clean up processed buffer to be safe
+    if (mixer->processed_buffer) {
+        audio_buffer_destroy(mixer->processed_buffer);
+        mixer->processed_buffer = NULL;
+    }
+
+    mixer->audio_buffer = audio_load(filename);
     if (!mixer->audio_buffer) {
         printf("Error: Could not load audio file: %s\n", filename);
-        printf("Please check that the file exists and is a valid WAV file\n");
+        printf("Please check that the file exists and is a valid WAV or MP3 file\n");
         return 0;
     }
-    
+
     mixer->sample_rate = (float)mixer->audio_buffer->sample_rate;
     mixer->channels = mixer->audio_buffer->channels;
     mixer->playback_position = 0;
     mixer->is_processed = 0;
-    
+
     // Create processed buffer
-    if (mixer->processed_buffer) {
-        audio_buffer_destroy(mixer->processed_buffer);
-    }
     mixer->processed_buffer = audio_buffer_create(
         mixer->audio_buffer->length,
         mixer->audio_buffer->channels,
@@ -155,19 +164,40 @@ void mixer_process_effects(AudioMixer* mixer) {
     // Copy original to processed buffer
     audio_buffer_copy(mixer->processed_buffer, mixer->audio_buffer);
     
-    // Apply effects in sequence
+    // Create array of effect indices sorted by processing_order
+    int effect_indices[MAX_EFFECTS];
+    int num_active_effects = 0;
+    
+    // Collect active effects
     for (int i = 0; i < MAX_EFFECTS; i++) {
         if (mixer->effects[i].type != EFFECT_NONE && 
             mixer->effects[i].params.enabled && 
             mixer->effects[i].effect_instance) {
-            
-            process_effect(
-                mixer->effects[i].type,
-                mixer->effects[i].effect_instance,
-                &mixer->effects[i].params,
-                mixer->processed_buffer
-            );
+            effect_indices[num_active_effects++] = i;
         }
+    }
+    
+    // Sort by processing_order (simple bubble sort)
+    for (int i = 0; i < num_active_effects - 1; i++) {
+        for (int j = 0; j < num_active_effects - i - 1; j++) {
+            if (mixer->effects[effect_indices[j]].processing_order > 
+                mixer->effects[effect_indices[j + 1]].processing_order) {
+                int temp = effect_indices[j];
+                effect_indices[j] = effect_indices[j + 1];
+                effect_indices[j + 1] = temp;
+            }
+        }
+    }
+    
+    // Apply effects in sorted order
+    for (int i = 0; i < num_active_effects; i++) {
+        int effect_idx = effect_indices[i];
+        process_effect(
+            mixer->effects[effect_idx].type,
+            mixer->effects[effect_idx].effect_instance,
+            &mixer->effects[effect_idx].params,
+            mixer->processed_buffer
+        );
     }
     
     // Apply master volume
@@ -241,6 +271,9 @@ void mixer_add_effect(AudioMixer* mixer, EffectType type) {
             mixer->effects[i].effect_instance = create_effect_instance(type, mixer->sample_rate);
             
             strcpy(mixer->effects[i].name, get_effect_name(type));
+            
+            // Set default processing order to slot number + 1
+            mixer->effects[i].processing_order = i + 1;
             
             if (mixer->auto_process) {
                 mixer_process_effects(mixer);
@@ -508,9 +541,15 @@ const char* get_param_name(EffectType type, int param_index) {
 void get_param_range(EffectType type, int param_index, float* min, float* max) {
     switch (type) {
         case EFFECT_LOWPASS:
-        case EFFECT_HIGHPASS:
             if (param_index == 0) {
                 *min = 20.0f; *max = 20000.0f; // Frequency
+            } else {
+                *min = 0.1f; *max = 10.0f; // Q
+            }
+            break;
+        case EFFECT_HIGHPASS:
+            if (param_index == 0) {
+                *min = 0.0f; *max = 2000.0f; // Frequency: 0Hz - 2kHz
             } else {
                 *min = 0.1f; *max = 10.0f; // Q
             }

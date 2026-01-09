@@ -247,7 +247,7 @@ void eq_init(FourBandEQ* eq, float sample_rate) {
     eq->sample_rate = sample_rate;
     
     // Set up peaking filters at different frequencies with 0dB gain (transparent)
-    biquad_peaking(&eq->low_shelf, 100.0f, 1.0f, 0.0f, sample_rate);    // Bass
+    biquad_peaking(&eq->low_shelf, 50.0f, 1.0f, 0.0f, sample_rate);     // Bass (0-100Hz range)
     biquad_peaking(&eq->low_mid, 500.0f, 1.0f, 0.0f, sample_rate);      // Low-mid
     biquad_peaking(&eq->high_mid, 2000.0f, 1.0f, 0.0f, sample_rate);    // High-mid
     biquad_peaking(&eq->high_shelf, 8000.0f, 1.0f, 0.0f, sample_rate);  // Treble
