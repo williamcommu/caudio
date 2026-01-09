@@ -516,7 +516,7 @@ void get_param_range(EffectType type, int param_index, float* min, float* max) {
             }
             break;
         case EFFECT_EQ:
-            *min = -12.0f; *max = 12.0f; // dB
+            *min = -30.0f; *max = 30.0f; // dB
             break;
         case EFFECT_ECHO:
             if (param_index == 0) {

@@ -261,13 +261,13 @@ void eq_init(FourBandEQ* eq, float sample_rate) {
 
 // Set EQ band gains in dB (3-band version)
 void eq_set_gains(FourBandEQ* eq, float low, float mid, float high) {
-    // Clamp gains to reasonable range
-    if (low < -12.0f) low = -12.0f;
-    if (low > 12.0f) low = 12.0f;
-    if (mid < -12.0f) mid = -12.0f;
-    if (mid > 12.0f) mid = 12.0f;
-    if (high < -12.0f) high = -12.0f;
-    if (high > 12.0f) high = 12.0f;
+    // Clamp gains to expanded range
+    if (low < -30.0f) low = -30.0f;
+    if (low > 30.0f) low = 30.0f;
+    if (mid < -30.0f) mid = -30.0f;
+    if (mid > 30.0f) mid = 30.0f;
+    if (high < -30.0f) high = -30.0f;
+    if (high > 30.0f) high = 30.0f;
     
     // Store gains and convert dB to linear multipliers
     eq->low_gain = low;
