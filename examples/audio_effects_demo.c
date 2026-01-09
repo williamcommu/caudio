@@ -223,7 +223,7 @@ void demo_filters(void) {
     
     FourBandEQ eq;
     eq_init(&eq, sample_rate);
-    eq_set_gains(&eq, 6.0f, 0.0f, -3.0f, -6.0f); // Bass +6dB, treble -6dB
+    eq_set_gains(&eq, 6.0f, 0.0f, -6.0f); // Bass +6dB, mid 0dB, treble -6dB
     eq_process_buffer(&eq, filtered);
     wav_save("eq_filtered.wav", filtered);
     

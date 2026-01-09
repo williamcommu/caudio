@@ -139,3 +139,4 @@ Possible improvements for a full production GUI:
 - MIDI control support
 - Audio recording
 - Export to multiple formats
+

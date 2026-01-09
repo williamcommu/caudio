@@ -54,6 +54,7 @@ typedef struct {
     // Audio data
     AudioBuffer* audio_buffer;
     AudioBuffer* processed_buffer;
+    AudioBuffer* processing_buffer;   // Working buffer for background effect processing
     char input_filename[MAX_FILENAME];
     char output_filename[MAX_FILENAME];
     

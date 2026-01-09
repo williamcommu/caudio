@@ -1,4 +1,5 @@
 #include "audio_mixer_gui.h"
+#include "audio/audio_playback.h"
 #include "../include/wav_io.h"
 #include "../include/audio_core.h"
 #include "../include/audio_filters.h"
@@ -46,6 +47,11 @@ void mixer_cleanup(AudioMixer* mixer) {
         mixer->processed_buffer = NULL;
     }
     
+    if (mixer->processing_buffer) {
+        audio_buffer_destroy(mixer->processing_buffer);
+        mixer->processing_buffer = NULL;
+    }
+    
     // Clean up effect instances
     for (int i = 0; i < MAX_EFFECTS; i++) {
         if (mixer->effects[i].effect_instance) {
@@ -74,10 +80,14 @@ int mixer_load_audio(AudioMixer* mixer, const char* filename) {
         mixer->audio_buffer = NULL;
     }
     
-    // Also clean up processed buffer to be safe
+    // Also clean up processed buffers to be safe
     if (mixer->processed_buffer) {
         audio_buffer_destroy(mixer->processed_buffer);
         mixer->processed_buffer = NULL;
+    }
+    if (mixer->processing_buffer) {
+        audio_buffer_destroy(mixer->processing_buffer);
+        mixer->processing_buffer = NULL;
     }
 
     mixer->audio_buffer = audio_load(filename);
@@ -92,12 +102,34 @@ int mixer_load_audio(AudioMixer* mixer, const char* filename) {
     mixer->playback_position = 0;
     mixer->is_processed = 0;
 
-    // Create processed buffer
+    // Create processed and processing buffers
     mixer->processed_buffer = audio_buffer_create(
         mixer->audio_buffer->length,
         mixer->audio_buffer->channels,
         mixer->audio_buffer->sample_rate
     );
+    mixer->processing_buffer = audio_buffer_create(
+        mixer->audio_buffer->length,
+        mixer->audio_buffer->channels,
+        mixer->audio_buffer->sample_rate
+    );
+    
+    if (!mixer->processed_buffer || !mixer->processing_buffer) {
+        if (mixer->processed_buffer) {
+            audio_buffer_destroy(mixer->processed_buffer);
+            mixer->processed_buffer = NULL;
+        }
+        if (mixer->processing_buffer) {
+            audio_buffer_destroy(mixer->processing_buffer);
+            mixer->processing_buffer = NULL;
+        }
+        if (mixer->audio_buffer) {
+            audio_buffer_destroy(mixer->audio_buffer);
+            mixer->audio_buffer = NULL;
+        }
+        printf("Error: Failed to allocate processing buffers.\n");
+        return 0;
+    }
     
     // Auto-process if enabled
     if (mixer->auto_process) {
@@ -161,26 +193,44 @@ void mixer_process_effects(AudioMixer* mixer) {
         return;
     }
     
-    // Copy original to processed buffer
-    audio_buffer_copy(mixer->processed_buffer, mixer->audio_buffer);
+    size_t target_length = mixer->audio_buffer->length;
+    size_t target_channels = mixer->audio_buffer->channels;
+    size_t target_rate = mixer->audio_buffer->sample_rate;
+    size_t target_capacity = mixer->audio_buffer->capacity;
+    
+    // Ensure we have a working buffer that matches the current audio
+    if (!mixer->processing_buffer ||
+        mixer->processing_buffer->capacity != target_capacity ||
+        mixer->processing_buffer->channels != target_channels ||
+        mixer->processing_buffer->sample_rate != target_rate) {
+        if (mixer->processing_buffer) {
+            audio_buffer_destroy(mixer->processing_buffer);
+        }
+        mixer->processing_buffer = audio_buffer_create(target_length, target_channels, target_rate);
+        if (!mixer->processing_buffer) {
+            printf("Error: Unable to allocate processing buffer.\n");
+            return;
+        }
+    }
+    
+    AudioBuffer* work_buffer = mixer->processing_buffer;
+    audio_buffer_copy(work_buffer, mixer->audio_buffer);
     
     // Create array of effect indices sorted by processing_order
     int effect_indices[MAX_EFFECTS];
     int num_active_effects = 0;
     
-    // Collect active effects
     for (int i = 0; i < MAX_EFFECTS; i++) {
-        if (mixer->effects[i].type != EFFECT_NONE && 
-            mixer->effects[i].params.enabled && 
+        if (mixer->effects[i].type != EFFECT_NONE &&
+            mixer->effects[i].params.enabled &&
             mixer->effects[i].effect_instance) {
             effect_indices[num_active_effects++] = i;
         }
     }
     
-    // Sort by processing_order (simple bubble sort)
     for (int i = 0; i < num_active_effects - 1; i++) {
         for (int j = 0; j < num_active_effects - i - 1; j++) {
-            if (mixer->effects[effect_indices[j]].processing_order > 
+            if (mixer->effects[effect_indices[j]].processing_order >
                 mixer->effects[effect_indices[j + 1]].processing_order) {
                 int temp = effect_indices[j];
                 effect_indices[j] = effect_indices[j + 1];
@@ -189,22 +239,33 @@ void mixer_process_effects(AudioMixer* mixer) {
         }
     }
     
-    // Apply effects in sorted order
+    // Apply effects in sorted order into the working buffer
     for (int i = 0; i < num_active_effects; i++) {
         int effect_idx = effect_indices[i];
         process_effect(
             mixer->effects[effect_idx].type,
             mixer->effects[effect_idx].effect_instance,
             &mixer->effects[effect_idx].params,
-            mixer->processed_buffer
+            work_buffer
         );
     }
     
-    // Apply master volume
     if (mixer->master_volume != 1.0f) {
-        for (size_t i = 0; i < mixer->processed_buffer->capacity; i++) {
-            mixer->processed_buffer->data[i] *= mixer->master_volume;
+        for (size_t i = 0; i < work_buffer->capacity; i++) {
+            work_buffer->data[i] *= mixer->master_volume;
         }
+    }
+    
+    // Swap processed and working buffers while audio is safely paused
+    SDL_AudioDeviceID device = get_audio_device();
+    if (device) {
+        SDL_LockAudioDevice(device);
+    }
+    AudioBuffer* old_playback = mixer->processed_buffer;
+    mixer->processed_buffer = mixer->processing_buffer;
+    mixer->processing_buffer = old_playback;
+    if (device) {
+        SDL_UnlockAudioDevice(device);
     }
     
     mixer->is_processed = 1;
@@ -215,9 +276,11 @@ void mixer_add_effect(AudioMixer* mixer, EffectType type) {
     // Find first empty slot
     for (int i = 0; i < MAX_EFFECTS; i++) {
         if (mixer->effects[i].type == EFFECT_NONE) {
+            memset(&mixer->effects[i].params, 0, sizeof(EffectParams));
             mixer->effects[i].type = type;
             mixer->effects[i].params.enabled = 1;
             mixer->effects[i].params.mix = 1.0f;
+            mixer->effects[i].params.param4 = 0.0f;
             
             // Set default parameters based on effect type
             switch (type) {
@@ -292,7 +355,7 @@ void mixer_remove_effect(AudioMixer* mixer, int index) {
         }
         
         mixer->effects[index].type = EFFECT_NONE;
-        mixer->effects[index].params.enabled = 0;
+        memset(&mixer->effects[index].params, 0, sizeof(EffectParams));
         snprintf(mixer->effects[index].name, sizeof(mixer->effects[index].name), "Slot %d", index + 1);
         
         if (mixer->auto_process) {
@@ -408,9 +471,22 @@ void process_effect(EffectType type, void* instance, EffectParams* params, Audio
             break;
         }
         case EFFECT_EQ: {
-            FourBandEQ* eq = (FourBandEQ*)instance;
-            eq_set_gains(eq, params->param1, params->param2, params->param3);
-            eq_process_buffer(eq, buffer);
+            // Try to use as parametric EQ first if it looks like one
+            // Simple heuristic: check if the memory looks like a ParametricEQ structure
+            // For safety, we'll assume FourBandEQ unless explicitly converted
+            // A better approach: check a signature or use params.param4 as a flag
+            
+            // Use param4 as a flag: 0 = FourBandEQ, 1 = ParametricEQ
+            if (params->param4 == 1.0f) {
+                // Parametric EQ mode
+                ParametricEQ* parametric_eq = (ParametricEQ*)instance;
+                parametric_eq_process_buffer(parametric_eq, buffer);
+            } else {
+                // Traditional 4-band EQ mode
+                FourBandEQ* eq = (FourBandEQ*)instance;
+                eq_set_gains(eq, params->param1, params->param2, params->param3);
+                eq_process_buffer(eq, buffer);
+            }
             break;
         }
         case EFFECT_ECHO: {

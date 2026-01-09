@@ -24,7 +24,11 @@ LIBRARY = libaudiofx.a
 # Source files
 SOURCES = audio_core.c wav_io.c audio_filters.c delay_effects.c reverb.c distortion.c modulation_effects.c
 MAIN_SOURCE = audio_effects_demo.c
-GUI_SOURCES = audio_mixer.c simple_gui.c
+GUI_SOURCES = audio_mixer.c simple_gui.c \
+              widgets/ui_widgets.c \
+              audio/spectrum_analyzer.c \
+              audio/audio_playback.c \
+              windows/eq_window.c
 GUI_MAIN_SOURCE = audio_mixer_main.c
 
 SRC_OBJECTS = $(addprefix $(BUILD_DIR)/, $(SOURCES:.c=.o))
@@ -85,6 +89,7 @@ $(BUILD_DIR)/$(MAIN_SOURCE:.c=.o): $(EXAMPLES_DIR)/$(MAIN_SOURCE) $(HEADERS) | $
 # Compile GUI files from gui directory
 $(BUILD_DIR)/%.o: $(GUI_DIR)/%.c $(HEADERS) $(GUI_HEADERS) | $(BUILD_DIR)
 	@echo "Compiling GUI $<..."
+	@mkdir -p $(dir $@)
 	$(CC) $(CFLAGS) -c $< -o $@
 
 # Debug build
