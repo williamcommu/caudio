@@ -7,6 +7,7 @@
 extern int gui_init(void);
 extern void gui_shutdown(void);
 extern int gui_render_frame(AudioMixer* mixer);
+extern int init_audio_playback(AudioMixer* mixer);
 
 int main(int argc, char** argv) {
     printf("Audio Effects Mixer - GUI Application\n");
@@ -24,6 +25,10 @@ int main(int argc, char** argv) {
         printf("Loading audio file: %s\n", argv[1]);
         if (mixer_load_audio(&mixer, argv[1])) {
             printf("Audio loaded successfully\n");
+            // Initialize audio playback system
+            if (init_audio_playback(&mixer)) {
+                printf("Audio playback system initialized\n");
+            }
         } else {
             printf("Failed to load audio file\n");
         }

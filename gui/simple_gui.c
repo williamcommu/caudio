@@ -18,6 +18,119 @@ static int window_width = 1200;
 static int window_height = 800;
 static int running = 1;
 
+// Audio playback state
+static SDL_AudioDeviceID audio_device = 0;
+static SDL_AudioSpec audio_spec;
+static AudioMixer* current_mixer = NULL;
+static int is_playing = 0;
+static int is_paused = 0;
+static size_t playback_position = 0;
+static float playback_volume = 0.7f;
+
+// Audio callback function for SDL
+void audio_callback(void* userdata, Uint8* stream, int len) {
+    AudioMixer* mixer = (AudioMixer*)userdata;
+    
+    if (!mixer || !mixer->processed_buffer || !is_playing || is_paused) {
+        // Fill with silence
+        SDL_memset(stream, 0, len);
+        return;
+    }
+    
+    int samples_requested = len / sizeof(float);
+    float* output = (float*)stream;
+    
+    for (int i = 0; i < samples_requested; i++) {
+        if (playback_position >= mixer->processed_buffer->length) {
+            // End of audio reached
+            output[i] = 0.0f;
+            if (i == 0) {
+                is_playing = 0;  // Stop playback when audio ends
+                playback_position = 0;
+            }
+        } else {
+            // Get sample from processed buffer
+            float sample = mixer->processed_buffer->data[playback_position];
+            output[i] = sample * playback_volume;
+            playback_position++;
+        }
+    }
+}
+
+// Initialize audio subsystem
+int init_audio_playback(AudioMixer* mixer) {
+    current_mixer = mixer;
+    
+    SDL_AudioSpec desired_spec;
+    SDL_zero(desired_spec);
+    desired_spec.freq = 44100;
+    desired_spec.format = AUDIO_F32SYS;  // 32-bit float
+    desired_spec.channels = 1;           // Mono for now
+    desired_spec.samples = 1024;         // Buffer size
+    desired_spec.callback = audio_callback;
+    desired_spec.userdata = mixer;
+    
+    audio_device = SDL_OpenAudioDevice(NULL, 0, &desired_spec, &audio_spec, 0);
+    if (audio_device == 0) {
+        printf("Failed to open audio device: %s\\n", SDL_GetError());
+        return 0;
+    }
+    
+    printf("Audio device opened: %d Hz, %d channels, buffer size %d\\n", 
+           audio_spec.freq, audio_spec.channels, audio_spec.samples);
+    
+    return 1;
+}
+
+// Cleanup audio subsystem
+void cleanup_audio_playback(void) {
+    if (audio_device) {
+        SDL_CloseAudioDevice(audio_device);
+        audio_device = 0;
+    }
+    is_playing = 0;
+    is_paused = 0;
+    playback_position = 0;
+}
+
+// Playback control functions
+void start_playback(void) {
+    if (audio_device && current_mixer && current_mixer->processed_buffer) {
+        is_playing = 1;
+        is_paused = 0;
+        SDL_PauseAudioDevice(audio_device, 0);  // Start playback
+        printf("Playback started\\n");
+    }
+}
+
+void pause_playback(void) {
+    if (audio_device && is_playing) {
+        is_paused = !is_paused;
+        SDL_PauseAudioDevice(audio_device, is_paused ? 1 : 0);
+        printf("Playback %s\\n", is_paused ? "paused" : "resumed");
+    }
+}
+
+void stop_playback(void) {
+    if (audio_device) {
+        is_playing = 0;
+        is_paused = 0;
+        playback_position = 0;
+        SDL_PauseAudioDevice(audio_device, 1);  // Stop playback
+        printf("Playback stopped\\n");
+    }
+}
+
+void seek_playback(float position) {
+    if (current_mixer && current_mixer->processed_buffer) {
+        size_t new_pos = (size_t)(position * current_mixer->processed_buffer->length);
+        if (new_pos < current_mixer->processed_buffer->length) {
+            playback_position = new_pos;
+            printf("Seek to position: %.2f%%\\n", position * 100.0f);
+        }
+    }
+}
+
 // File dialog function
 char* open_file_dialog(void) {
     static char selected_file[512] = {0};
@@ -116,6 +229,15 @@ void draw_char(int x, int y, char c, int color_r, int color_g, int color_b);
 void draw_text(int x, int y, const char* text);
 void draw_text_colored(int x, int y, const char* text, int r, int g, int b);
 
+// Audio playback functions (forward declarations)
+void audio_callback(void* userdata, Uint8* stream, int len);
+int init_audio_playback(AudioMixer* mixer);
+void cleanup_audio_playback(void);
+void start_playback(void);
+void pause_playback(void);
+void stop_playback(void);
+void seek_playback(float position);
+
 // Simple UI element structures
 typedef struct {
     int x, y, width, height;
@@ -164,6 +286,8 @@ int gui_init(void) {
 
 // Shutdown GUI
 void gui_shutdown(void) {
+    cleanup_audio_playback();
+    
     if (renderer) {
         SDL_DestroyRenderer(renderer);
         renderer = NULL;
@@ -495,15 +619,30 @@ int gui_render_frame(AudioMixer* mixer) {
         if (!process_button_pressed) {
             process_button_pressed = 1;
             printf("Processing effects...\n");
+            
+            // Stop playback during processing
+            int was_playing = is_playing;
+            if (is_playing) {
+                stop_playback();
+            }
+            
             mixer_process_effects(mixer);
-            printf("Effects processing complete\n");
+            printf("Effects processing complete\\n");
+            
+            // Restart playback if it was playing before
+            if (was_playing && mixer->processed_buffer) {
+                if (!audio_device) {
+                    init_audio_playback(mixer);
+                }
+                start_playback();
+            }
         }
     } else {
         process_button_pressed = 0;
     }
     
     // Master controls panel
-    SDL_Rect master_panel = {10, 100, window_width - 20, 80};
+    SDL_Rect master_panel = {10, 100, window_width - 20, 120}; // Made taller for playback controls
     SDL_RenderFillRect(renderer, &master_panel);
     draw_text(20, 110, "Master Controls");
     
@@ -517,8 +656,69 @@ int gui_render_frame(AudioMixer* mixer) {
     }
     draw_text(30, 165, "Master Volume");
     
+    // Playback volume slider
+    Slider playback_vol_slider = {250, 130, 150, 30, playback_volume, 0.0f, 1.0f, 0, "PlayVol"};
+    if (draw_slider(&playback_vol_slider, mouse_x, mouse_y, mouse_pressed)) {
+        playback_volume = playback_vol_slider.value;
+    }
+    draw_text(250, 165, "Playback Volume");
+    
+    // Playback controls
+    static int play_button_pressed = 0, pause_button_pressed = 0, stop_button_pressed = 0;
+    
+    Button play_btn = {420, 130, 60, 30, 0, 0, ""};
+    strcpy(play_btn.text, is_playing && !is_paused ? "Playing" : "Play");
+    if (draw_button(&play_btn, mouse_x, mouse_y, mouse_pressed)) {
+        if (!play_button_pressed) {
+            play_button_pressed = 1;
+            if (!audio_device && mixer->processed_buffer) {
+                init_audio_playback(mixer);
+            }
+            start_playback();
+        }
+    } else {
+        play_button_pressed = 0;
+    }
+    
+    Button pause_btn = {490, 130, 60, 30, 0, 0, ""};
+    strcpy(pause_btn.text, is_paused ? "Resume" : "Pause");
+    if (draw_button(&pause_btn, mouse_x, mouse_y, mouse_pressed)) {
+        if (!pause_button_pressed) {
+            pause_button_pressed = 1;
+            pause_playback();
+        }
+    } else {
+        pause_button_pressed = 0;
+    }
+    
+    Button stop_btn = {560, 130, 60, 30, 0, 0, "Stop"};
+    if (draw_button(&stop_btn, mouse_x, mouse_y, mouse_pressed)) {
+        if (!stop_button_pressed) {
+            stop_button_pressed = 1;
+            stop_playback();
+        }
+    } else {
+        stop_button_pressed = 0;
+    }
+    
+    // Playback position slider (seek bar)
+    if (mixer->processed_buffer && mixer->processed_buffer->length > 0) {
+        float position = (float)playback_position / mixer->processed_buffer->length;
+        Slider position_slider = {30, 190, 400, 20, position, 0.0f, 1.0f, 0, "Position"};
+        if (draw_slider(&position_slider, mouse_x, mouse_y, mouse_pressed)) {
+            seek_playback(position_slider.value);
+        }
+        
+        // Show playback time
+        float current_time = (float)playback_position / mixer->sample_rate;
+        float total_time = (float)mixer->processed_buffer->length / mixer->sample_rate;
+        char time_text[64];
+        snprintf(time_text, sizeof(time_text), "%.1fs / %.1fs", current_time, total_time);
+        draw_text(450, 190, time_text);
+    }
+    
     // Effects chain panel
-    int effects_y = 190;
+    int effects_y = 230;  // Moved down to account for taller master controls
     SDL_Rect effects_panel = {10, effects_y, window_width - 20, window_height - effects_y - 10};
     SDL_RenderFillRect(renderer, &effects_panel);
     draw_text(20, effects_y + 10, "Effects Chain");
@@ -631,8 +831,15 @@ int gui_render_frame(AudioMixer* mixer) {
                     
                     if (draw_slider(&param_slider, mouse_x, mouse_y, mouse_pressed)) {
                         *param_value = param_slider.value;
+                        // Real-time processing for live audio feedback
                         if (mixer->auto_process) {
                             mixer_process_effects(mixer);
+                            // If audio is playing, briefly pause and resume to update the audio buffer
+                            if (is_playing && audio_device) {
+                                SDL_LockAudioDevice(audio_device);
+                                // Audio processing happens here safely
+                                SDL_UnlockAudioDevice(audio_device);
+                            }
                         }
                     }
                     

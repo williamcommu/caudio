@@ -31,6 +31,7 @@ void biquad_lowpass(BiquadFilter* filter, float freq, float q, float sample_rate
 void biquad_highpass(BiquadFilter* filter, float freq, float q, float sample_rate);
 void biquad_bandpass(BiquadFilter* filter, float freq, float q, float sample_rate);
 void biquad_notch(BiquadFilter* filter, float freq, float q, float sample_rate);
+void biquad_peaking(BiquadFilter* filter, float freq, float q, float gain_db, float sample_rate);
 
 // Filter processing functions
 float biquad_process(BiquadFilter* filter, float input);
@@ -53,11 +54,12 @@ typedef struct {
     float low_mid_gain;
     float high_mid_gain;
     float high_gain;
+    float sample_rate;  // Store sample rate for parameter updates
 } FourBandEQ;
 
-// EQ functions
+// EQ functions (3-band EQ: Low, Mid, High)
 void eq_init(FourBandEQ* eq, float sample_rate);
-void eq_set_gains(FourBandEQ* eq, float low, float low_mid, float high_mid, float high);
+void eq_set_gains(FourBandEQ* eq, float low, float mid, float high);
 float eq_process(FourBandEQ* eq, float input);
 void eq_process_buffer(FourBandEQ* eq, AudioBuffer* buffer);
 

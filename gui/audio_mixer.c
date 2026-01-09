@@ -197,13 +197,13 @@ void mixer_add_effect(AudioMixer* mixer, EffectType type) {
                     mixer->effects[i].params.param2 = 0.7f;    // Q
                     break;
                 case EFFECT_EQ:
-                    mixer->effects[i].params.param1 = 0.0f;    // Low
-                    mixer->effects[i].params.param2 = 0.0f;    // Mid
-                    mixer->effects[i].params.param3 = 0.0f;    // High
+                    mixer->effects[i].params.param1 = 0.0f;    // Low (neutral)
+                    mixer->effects[i].params.param2 = 0.0f;    // Mid (neutral)
+                    mixer->effects[i].params.param3 = 0.0f;    // High (neutral)
                     break;
                 case EFFECT_ECHO:
                     mixer->effects[i].params.param1 = 0.3f;    // Delay
-                    mixer->effects[i].params.param2 = 0.3f;    // Feedback
+                    mixer->effects[i].params.param2 = 0.1f;    // Feedback
                     break;
                 case EFFECT_REVERB:
                     mixer->effects[i].params.param1 = 0.5f;    // Room size
@@ -213,7 +213,7 @@ void mixer_add_effect(AudioMixer* mixer, EffectType type) {
                 case EFFECT_TUBE:
                 case EFFECT_FUZZ:
                     mixer->effects[i].params.param1 = 5.0f;    // Drive
-                    mixer->effects[i].params.param2 = 0.7f;    // Output gain
+                    mixer->effects[i].params.param2 = 1.0f;    // Output
                     break;
                 case EFFECT_CHORUS:
                 case EFFECT_FLANGER:
@@ -224,7 +224,7 @@ void mixer_add_effect(AudioMixer* mixer, EffectType type) {
                 case EFFECT_PHASER:
                     mixer->effects[i].params.param1 = 0.5f;    // Rate
                     mixer->effects[i].params.param2 = 0.7f;    // Depth
-                    mixer->effects[i].params.param3 = 0.3f;    // Feedback
+                    mixer->effects[i].params.param3 = 0.1f;    // Feedback
                     break;
                 case EFFECT_TREMOLO:
                     mixer->effects[i].params.param1 = 5.0f;    // Rate
@@ -287,8 +287,11 @@ void* create_effect_instance(EffectType type, float sample_rate) {
         case EFFECT_LOWPASS:
         case EFFECT_HIGHPASS:
             return malloc(sizeof(BiquadFilter));
-        case EFFECT_EQ:
-            return malloc(sizeof(FourBandEQ));
+        case EFFECT_EQ: {
+            FourBandEQ* eq = malloc(sizeof(FourBandEQ));
+            if (eq) eq_init(eq, sample_rate);
+            return eq;
+        }
         case EFFECT_ECHO:
             return echo_create(2.0f, sample_rate);
         case EFFECT_REVERB:
@@ -373,7 +376,7 @@ void process_effect(EffectType type, void* instance, EffectParams* params, Audio
         }
         case EFFECT_EQ: {
             FourBandEQ* eq = (FourBandEQ*)instance;
-            eq_set_gains(eq, params->param1, params->param2, params->param3, 0.0f);
+            eq_set_gains(eq, params->param1, params->param2, params->param3);
             eq_process_buffer(eq, buffer);
             break;
         }
