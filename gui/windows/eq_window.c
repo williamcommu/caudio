@@ -2,11 +2,21 @@
 #include "eq_window.h"
 #include "../widgets/ui_widgets.h"
 #include "../audio/audio_playback.h"
+#include "../audio/spectrum_analyzer.h"
 #include "../../include/audio_filters.h"
 #include <stdio.h>
 #include <math.h>
 #include <stdlib.h>
 #include <string.h>
+
+#ifndef M_PI
+#define M_PI 3.14159265358979323846
+#endif
+
+// External access to spectrum data from spectrum_analyzer.c
+extern float fft_magnitude[FFT_SIZE / 2];
+extern float spectrum_bars[SPECTRUM_BARS];
+extern int spectrum_bar_freqs[SPECTRUM_BARS];
 
 // EQ window state
 static SDL_Window* eq_window = NULL;
@@ -91,6 +101,238 @@ static void request_eq_reprocess(int immediate) {
     
     eq_reprocess_pending = 1;
     eq_last_change_tick = SDL_GetTicks();
+}
+
+// Calculate frequency response magnitude for a single parametric EQ band
+static float calculate_band_response(float freq, float center_freq, float q, float gain_db) {
+    if (!center_freq || center_freq <= 0) return 0.0f;
+    
+    float omega = 2.0f * M_PI * freq;
+    float omega0 = 2.0f * M_PI * center_freq;
+    float A = powf(10.0f, gain_db / 40.0f); // Linear gain
+    float S = 1.0f; // Shelf slope parameter
+    float alpha = sinf(omega0) / (2.0f * q);
+    
+    // Calculate biquad coefficients for peaking EQ
+    float b0 = 1.0f + alpha * A;
+    float b1 = -2.0f * cosf(omega0);
+    float b2 = 1.0f - alpha * A;
+    float a0 = 1.0f + alpha / A;
+    float a1 = -2.0f * cosf(omega0);
+    float a2 = 1.0f - alpha / A;
+    
+    // Normalize coefficients
+    b0 /= a0; b1 /= a0; b2 /= a0;
+    a1 /= a0; a2 /= a0;
+    
+    // Calculate frequency response H(jw) = (b0 + b1*e^(-jw) + b2*e^(-j2w)) / (1 + a1*e^(-jw) + a2*e^(-j2w))
+    float cos_w = cosf(omega);
+    float cos_2w = cosf(2.0f * omega);
+    float sin_w = sinf(omega);
+    float sin_2w = sinf(2.0f * omega);
+    
+    // Numerator: b0 + b1*cos(w) + b2*cos(2w) + j*(-b1*sin(w) - b2*sin(2w))
+    float num_real = b0 + b1 * cos_w + b2 * cos_2w;
+    float num_imag = -b1 * sin_w - b2 * sin_2w;
+    
+    // Denominator: 1 + a1*cos(w) + a2*cos(2w) + j*(-a1*sin(w) - a2*sin(2w))
+    float den_real = 1.0f + a1 * cos_w + a2 * cos_2w;
+    float den_imag = -a1 * sin_w - a2 * sin_2w;
+    
+    // Magnitude of H(jw) = |numerator| / |denominator|
+    float num_mag = sqrtf(num_real * num_real + num_imag * num_imag);
+    float den_mag = sqrtf(den_real * den_real + den_imag * den_imag);
+    
+    if (den_mag < 1e-10f) return 0.0f;
+    
+    float magnitude = num_mag / den_mag;
+    return 20.0f * log10f(magnitude + 1e-10f); // Convert to dB
+}
+
+// Calculate combined frequency response for all enabled EQ bands
+static float calculate_total_response(float freq) {
+    if (!current_parametric_eq) return 0.0f;
+    
+    float total_db = 0.0f;
+    for (int i = 0; i < MAX_EQ_BANDS; i++) {
+        if (current_parametric_eq->bands[i].enabled && 
+            current_parametric_eq->bands[i].frequency > 0) {
+            float band_response = calculate_band_response(
+                freq,
+                current_parametric_eq->bands[i].frequency,
+                current_parametric_eq->bands[i].q,
+                current_parametric_eq->bands[i].gain_db
+            );
+            total_db += band_response;
+        }
+    }
+    return total_db;
+}
+
+// Apply perceptual frequency weighting (similar to A-weighting for better high-freq representation)
+static float apply_perceptual_weighting(float freq, float magnitude_db) {
+    // A-weighting-inspired curve to boost high frequencies for better visual representation
+    float f2 = freq * freq;
+    float f4 = f2 * f2;
+    
+    // Simplified A-weighting formula adapted for visualization
+    float numerator = 12194.0f * 12194.0f * f4;
+    float denominator = (f2 + 20.6f * 20.6f) * sqrtf((f2 + 107.7f * 107.7f) * (f2 + 737.9f * 737.9f)) * (f2 + 12194.0f * 12194.0f);
+    
+    float a_weight_db = 0.0f;
+    if (denominator > 0.0f) {
+        a_weight_db = 20.0f * log10f(numerator / denominator) + 2.0f; // +2dB reference
+    }
+    
+    // Additional perceptual boost for visualization (not true A-weighting)
+    float vis_boost = 0.0f;
+    if (freq > 1000.0f) {
+        vis_boost = 3.0f * log10f(freq / 1000.0f); // Extra boost above 1kHz for visualization
+    }
+    
+    return magnitude_db + a_weight_db + vis_boost;
+}
+
+// Get spectrum magnitude for a specific frequency from FFT data
+static float get_spectrum_magnitude_at_freq(float freq, float sample_rate) {
+    if (!eq_mixer_ref || sample_rate <= 0) return -60.0f; // Very low if no audio
+    
+    float freq_per_bin = sample_rate / FFT_SIZE;
+    int bin_index = (int)(freq / freq_per_bin);
+    
+    if (bin_index < 0 || bin_index >= FFT_SIZE / 2) return -60.0f;
+    
+    // For higher frequencies, average multiple bins to get better representation
+    float magnitude = 0.0f;
+    int bins_to_average = 1;
+    
+    if (freq > 2000.0f) {
+        bins_to_average = (int)(freq / 2000.0f) + 1; // More averaging for higher frequencies
+        bins_to_average = fminf(bins_to_average, 5); // Cap at 5 bins
+    }
+    
+    // Average magnitude across multiple bins for smoother high-frequency response
+    for (int i = 0; i < bins_to_average; i++) {
+        int bin = bin_index + i;
+        if (bin < FFT_SIZE / 2) {
+            magnitude += fft_magnitude[bin];
+        }
+    }
+    magnitude /= bins_to_average;
+    
+    if (magnitude <= 0.0f) return -60.0f;
+    
+    float db = 20.0f * log10f(magnitude + 1e-10f);
+    
+    // Apply perceptual weighting to better represent what you hear
+    db = apply_perceptual_weighting(freq, db);
+    
+    return fmaxf(-60.0f, fminf(20.0f, db)); // Increased max to 20dB
+}
+
+// Draw real-time audio spectrum wave with EQ response applied
+static void draw_frequency_response_wave(int graph_x, int graph_y, int graph_width, int graph_height) {
+    if (!current_parametric_eq || !eq_mixer_ref) return;
+    
+    const int num_points = graph_width / 2; // Calculate every 2 pixels for smooth curve
+    SDL_Point* spectrum_points = malloc(num_points * sizeof(SDL_Point));
+    SDL_Point* eq_points = malloc(num_points * sizeof(SDL_Point));
+    if (!spectrum_points || !eq_points) {
+        free(spectrum_points);
+        free(eq_points);
+        return;
+    }
+    
+    float sample_rate = eq_mixer_ref->sample_rate;
+    
+    // Calculate both original spectrum and EQ-modified spectrum
+    for (int i = 0; i < num_points; i++) {
+        float x_pos = (float)i * 2.0f; // Every 2 pixels
+        float freq = x_to_freq(graph_x + x_pos, graph_x, graph_width);
+        
+        // Get original spectrum magnitude from live audio
+        float original_db = get_spectrum_magnitude_at_freq(freq, sample_rate);
+        
+        // Get EQ response at this frequency
+        float eq_response_db = calculate_total_response(freq);
+        
+        // Apply EQ to the spectrum (add in dB domain)
+        float modified_db = original_db + eq_response_db;
+        
+        // Improved mapping for better high-frequency visibility
+        // Map wider dB range to display range with better scaling
+        float display_original = (original_db + 50.0f) / 70.0f * 48.0f - 24.0f; // Map -50 to +20 dB -> -24 to +24 dB display
+        float display_modified = (modified_db + 50.0f) / 70.0f * 48.0f - 24.0f;
+        
+        // Clamp to display range
+        display_original = fmaxf(-24.0f, fminf(24.0f, display_original));
+        display_modified = fmaxf(-24.0f, fminf(24.0f, display_modified));
+        
+        spectrum_points[i].x = graph_x + (int)x_pos;
+        spectrum_points[i].y = gain_to_y(display_original, graph_y, graph_height);
+        
+        eq_points[i].x = graph_x + (int)x_pos;
+        eq_points[i].y = gain_to_y(display_modified, graph_y, graph_height);
+    }
+    
+    // Draw original spectrum (dim, behind)
+    SDL_SetRenderDrawColor(eq_renderer, 80, 80, 80, 60);
+    for (int i = 0; i < num_points - 1; i++) {
+        SDL_RenderDrawLine(eq_renderer, 
+                         spectrum_points[i].x, spectrum_points[i].y,
+                         spectrum_points[i+1].x, spectrum_points[i+1].y);
+    }
+    
+    // Fill area under original spectrum (very dim)
+    int zero_y = gain_to_y(0.0f, graph_y, graph_height);
+    SDL_SetRenderDrawColor(eq_renderer, 60, 60, 80, 20);
+    for (int i = 0; i < num_points - 1; i++) {
+        int y_start = (spectrum_points[i].y > zero_y) ? zero_y : spectrum_points[i].y;
+        int y_end = (spectrum_points[i].y < zero_y) ? zero_y : spectrum_points[i].y;
+        if (y_end > y_start) {
+            SDL_RenderDrawLine(eq_renderer, spectrum_points[i].x, y_start, spectrum_points[i].x, y_end);
+        }
+    }
+    
+    // Draw EQ-modified spectrum (bright, in front)
+    for (int pass = 0; pass < 3; pass++) {
+        int alpha = (pass == 0) ? 120 : (pass == 1) ? 60 : 30;
+        int thickness = (pass == 0) ? 1 : (pass == 1) ? 2 : 3;
+        
+        SDL_SetRenderDrawColor(eq_renderer, 100, 255, 150, alpha);
+        
+        for (int i = 0; i < num_points - 1; i++) {
+            for (int t = -thickness; t <= thickness; t++) {
+                SDL_RenderDrawLine(eq_renderer, 
+                                 eq_points[i].x, eq_points[i].y + t,
+                                 eq_points[i+1].x, eq_points[i+1].y + t);
+            }
+        }
+    }
+    
+    // Fill area under EQ-modified spectrum with dynamic colors
+    for (int i = 0; i < num_points - 1; i++) {
+        float freq = x_to_freq(eq_points[i].x, graph_x, graph_width);
+        float eq_response_db = calculate_total_response(freq);
+        
+        // Color based on EQ modification
+        if (eq_response_db > 0.5f) {
+            SDL_SetRenderDrawColor(eq_renderer, 120, 255, 120, 40); // Green for boost
+        } else if (eq_response_db < -0.5f) {
+            SDL_SetRenderDrawColor(eq_renderer, 255, 120, 120, 40); // Red for cut
+        } else {
+            SDL_SetRenderDrawColor(eq_renderer, 100, 200, 255, 30); // Blue for neutral
+        }
+        
+        int y_start = (eq_points[i].y > zero_y) ? zero_y : eq_points[i].y;
+        int y_end = (eq_points[i].y < zero_y) ? zero_y : eq_points[i].y;
+        if (y_end > y_start) {
+            SDL_RenderDrawLine(eq_renderer, eq_points[i].x, y_start, eq_points[i].x, y_end);
+        }
+    }
+    
+    free(spectrum_points);
+    free(eq_points);
 }
 
 // Open advanced EQ window for a specific effect
@@ -325,6 +567,9 @@ void render_advanced_eq_window(AudioMixer* mixer) {
         }
         draw_text_colored(eq_renderer, x - 10, graph_y + graph_height + 5, label, 140, 140, 140);
     }
+    
+    // Draw frequency response wave behind the bands
+    draw_frequency_response_wave(graph_x, graph_y, graph_width, graph_height);
     
     // Draw EQ curve (band positions and influence)
     SDL_SetRenderDrawColor(eq_renderer, 100, 180, 255, 255);

@@ -11,11 +11,11 @@
 
 #define TWO_PI (2.0f * M_PI)
 
-// Spectrum analyzer data
-static float fft_input[FFT_SIZE];
-static float fft_magnitude[FFT_SIZE / 2];
-static float spectrum_bars[SPECTRUM_BARS];
-static int spectrum_bar_freqs[SPECTRUM_BARS];
+// Spectrum analyzer data - now global for EQ window access
+float fft_input[FFT_SIZE];
+float fft_magnitude[FFT_SIZE / 2];
+float spectrum_bars[SPECTRUM_BARS];
+int spectrum_bar_freqs[SPECTRUM_BARS];
 static Uint32 last_spectrum_update = 0;
 
 // Simple FFT implementation (Cooley-Tukey algorithm)

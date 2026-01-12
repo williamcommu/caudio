@@ -8,6 +8,11 @@
 #define FFT_SIZE 2048
 #define SPECTRUM_BARS 50
 
+// Global spectrum data for access from other modules (like EQ window)
+extern float fft_magnitude[FFT_SIZE / 2];
+extern float spectrum_bars[SPECTRUM_BARS];
+extern int spectrum_bar_freqs[SPECTRUM_BARS];
+
 // Initialize spectrum analyzer frequency bins
 void init_spectrum_analyzer(void);
 
